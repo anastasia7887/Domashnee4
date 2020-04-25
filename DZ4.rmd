@@ -1,0 +1,145 @@
+---
+title: "Domashnee4"
+author: "Kononova A.A."
+date: '17 апреля 2020 г '
+output: html_document
+---
+
+Загрузка пакетов
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library('sp')                    # функция spplot()
+library('ggplot2')               # функция ggplot()
+library('RColorBrewer')          # цветовые палитры
+require('rgdal')                 # функция readOGR()
+library('broom')                 # функция tidy()
+require('dplyr')                 # функция join()
+library('scales')                # функция pretty_breaks()
+library('mapproj')               # проекции для карт
+## установка и сборка пакета «gpclib»
+## установить RTools (recommended) отсюда:
+## http://cran.r-project.org/bin/windows/Rtools/
+## install.packages('gpclib', type = 'source')
+library('gpclib')
+library('maptools')
+# разрешить использовать полигональную геометрию, которая защищена лицензией 
+gpclibPermit()
+```
+
+В данной работе создаются визуальные карты с данными по количеству занятого населения 
+При помощи пакетов ggplot2 (данные за 2010 год) и spplot (данные за 2018 год)
+
+Архив с нужными данными скачиваем и разархивируем в коренной каталог по следующему пути -->  (‘./data’)
+
+
+```{r cars}
+ShapeFileURL <- "https://biogeo.ucdavis.edu/data/gadm3.6/shp/gadm36_RUS_shp.zip"
+if (!file.exists('./data')) dir.create('./data')
+if (!file.exists('./data/gadm36_RUS_shp.zip')) {
+  download.file(ShapeFileURL, destfile = './data/gadm36_RUS_shp.zip')
+}
+# распаковка данных (архив в ./data)
+unzip('./data/gadm36_RUS_shp.zip', exdir = './data/RUS_adm_shp')
+
+# прочитать данные уровней 0, 1
+Regions0 <- readOGR("./data/RUS_adm_shp/gadm36_RUS_0.shp", stringsAsFactors = F)
+Regions1 <- readOGR("./data/RUS_adm_shp/gadm36_RUS_1.shp", stringsAsFactors = F)
+
+```
+
+Удаляем лишние данные из ggplot, выбирая то, что не включается в список, используя список с регионами ПФО
+
+
+
+```{r pressure, echo=FALSE}
+#  посмотрим на имена слотов объекта-карты
+slotNames(Regions1)
+
+# слот data
+head(Regions1@data)
+# head(Regions1@polygons)
+colnames(Regions1@data)
+
+# преобразуем кодировку
+Encoding(Regions1@data$NL_NAME_1) <- 'UTF-8'
+Regions1@data$NL_NAME_1[1:10]
+
+# делаем фрейм с координатами для ggplot
+Regions.points <- fortify(Regions1, region = 'NAME_1')
+
+# оставляем только регионы ЦФО
+reg.names.PRIVOL <- c("Bashkortostan","Mariy-El","Mordovia","Tatarstan","Udmurt","Chuvash","Perm'",
+                      "Kirov","Nizhegorod","Orenburg","Penza","Samara","Saratov", "Ul'yanovsk")
+Regions.points <- Regions.points[Regions.points$id %in% reg.names.PRIVOL, ]
+
+```
+
+Данные за 2010-2018 год располагаются в CSV файле
+```{r}
+# присоединяем показатель числа занятых по ПФР 
+df.busy <- read.csv2('./Число_занятых.csv', stringsAsFactors = F)
+Regions.points <- merge(Regions.points, df.busy, by = 'id')
+Regions.points <- Regions.points[order(Regions.points$order), ]
+```
+
+Выбираем координатный подбор для необходимого отображения первого графика, что является лучшим вариантом, т.к. исключение ненужных данных является невозможным или затруднительным
+Строим график используя функцию «spplot ()»
+
+```{r}
+# график spplot ################################################################
+
+# работаем с Regions1, добавляем статистику
+Regions1@data <- merge(Regions1@data, df.busy, 
+                       by.x = 'NAME_1', by.y = 'id', all.x = T)
+
+# задаём границы карты
+scale.parameter <- 0.3  # шкалирование: меньше 1 -- ближе, больше 1 -- дальше
+xshift <- 10  # сдвиг вправо в е.и. карты 
+yshift <- -6  # сдвиг вверх в е.и. карты 
+original.bbox <- Regions1@bbox  # сохраняем исходные рамки
+
+# создаём новые рамки
+edges <- original.bbox
+edges[1, ] <- (edges[1, ] - mean(edges[1, ])) * 
+  scale.parameter + mean(edges[1, ]) + xshift
+edges[2, ] <- (edges[2, ] - mean(edges[2, ])) * scale.parameter + 
+  mean(edges[2, ]) + yshift
+
+# задаём палитру
+mypalette <- colorRampPalette(c('whitesmoke', 'coral4'))
+
+spplot(Regions1, 'Chislen_zanatih_2018',
+       col.regions = mypalette(20),  # определение цветовой шкалы
+       col = 'coral4',               # цвет контурных линий на карте
+       par.settings = list(axis.line = list(col = NA)), # без осей
+       xlim = edges[1, ], ylim = edges[2, ])
+
+```
+
+Второй график на готовых данных строим с использованием пакета ggplot2
+```{r}
+
+
+# график ggplot2 ################################################################
+
+
+# график ggplot2 
+gp <- ggplot() + 
+  geom_polygon(data = Regions.points, 
+               aes(long, lat, group = group, fill = Chislen_zanatih_2010)) +
+  geom_path(data = Regions.points, 
+            aes(long, lat, group = group),
+            color = 'coral4') +
+  coord_map(projection = 'gilbert') +
+  scale_fill_distiller(palette = 'OrRd',
+                       direction = 1,
+                       breaks = pretty_breaks(n = 5)) +
+  labs(x = 'Долгота', y = 'Широта', 
+       title = "Число занятых")
+# выводим график
+gp
+
+
+```
+
